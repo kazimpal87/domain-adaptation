@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 import pickle as pkl
-from utils import *
 
 def load_mnist(batch_size):
     from tensorflow.examples.tutorials.mnist import input_data
@@ -9,44 +8,56 @@ def load_mnist(batch_size):
     
     mnist_train = mnist.train.images.reshape(55000, 28, 28, 1)
     mnist_test = mnist.test.images.reshape(10000, 28, 28, 1)
-    
+
     mnist_train = np.concatenate([mnist_train, mnist_train, mnist_train], 3)
     mnist_test = np.concatenate([mnist_test, mnist_test, mnist_test], 3)
-
-    dataset_train = make_dataset(mnist_train, mnist.train.labels, batch_size)
-    dataset_test  = make_dataset(mnist_test,  mnist.test.labels,  batch_size)
     
-    return dataset_train, dataset_test
+    return mnist_train, mnist.train.labels, mnist_test, mnist.test.labels
 
 def load_mnist_m(batch_size):
     mnistm = pkl.load(open('mnistm_data.pkl', 'rb'))
     
     mnistm_train = mnistm['train'].astype(np.float32) / 255
     mnistm_test = mnistm['test'].astype(np.float32) / 255
-
-    dataset_train = make_dataset(mnistm_train, np.zeros((mnistm_train.shape[0], 10)), batch_size)
-    dataset_test  = make_dataset(mnistm_test,  np.zeros((mnistm_train.shape[0], 10)), batch_size)
     
-    return dataset_train, dataset_test
+    return mnistm_train, mnistm_test
 
 def get_mnist_vs_mnistm(batch_size=32):
-    dataset_s_train, dataset_s_test = load_mnist(batch_size // 2)
-    dataset_t_train, dataset_t_test = load_mnist_m(batch_size // 2)
+    mnist_train, mnist_train_labels, mnist_test, mnist_test_labels = load_mnist(batch_size // 2)
+    mnistm_train, mnistm_test = load_mnist_m(batch_size // 2)
 
-    iter_s_train = dataset_s_train.make_one_shot_iterator()
-    iter_s_test =  dataset_s_test.make_one_shot_iterator()
-    iter_t_train = dataset_t_train.make_one_shot_iterator()
-    iter_t_test =  dataset_t_test.make_one_shot_iterator()
+    pixel_mean = np.vstack([mnist_train, mnistm_train]).mean((0, 1, 2))
 
-    X_s_train, y_s_train = iter_s_train.get_next()
-    X_t_train, y_t_train = iter_t_train.get_next()
-    X_s_test, y_s_test = iter_s_test.get_next()
-    X_t_test, y_t_test = iter_t_test.get_next()
+    mnist_train -= pixel_mean
+    mnist_test -= pixel_mean
+    mnistm_train -= pixel_mean
+    mnistm_test -= pixel_mean
 
-    X_train = tf.concat([X_s_train, X_t_train], axis=0)
-    X_test =  tf.concat([X_s_test,  X_t_test],  axis=0)
-    y_train = tf.concat([y_s_train, y_t_train], axis=0)
-    y_test =  tf.concat([y_s_test,  y_t_test],  axis=0)
+    gen_source_train = batch_generator([mnist_train, mnist_train_labels], batch_size // 2)
+    gen_target_train = batch_generator([mnistm_train, mnist_train_labels], batch_size // 2)
+    gen_source_test = batch_generator([mnist_test, mnist_test_labels], batch_size // 2)
+    gen_target_test = batch_generator([mnistm_test, mnist_test_labels], batch_size // 2)
 
-    return X_train, y_train, X_test, y_test
+    return gen_source_train, gen_target_train, gen_source_test, gen_target_test
 
+def shuffle_aligned_list(data):
+    num = data[0].shape[0]
+    p = np.random.permutation(num)
+    return [d[p] for d in data]
+
+def batch_generator(data, batch_size, shuffle=True):
+    if shuffle:
+        data = shuffle_aligned_list(data)
+
+    batch_count = 0
+    while True:
+        if batch_count * batch_size + batch_size >= len(data[0]):
+            batch_count = 0
+
+            if shuffle:
+                data = shuffle_aligned_list(data)
+
+        start = batch_count * batch_size
+        end = start + batch_size
+        batch_count += 1
+        yield [d[start:end] for d in data]
